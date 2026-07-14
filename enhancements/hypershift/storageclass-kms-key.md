@@ -88,6 +88,11 @@ this feature depends on AWS approving that managed policy update.
   accessible, so I can catch KMS permission problems during provisioning, not after the first
   PVC failure.
 
+- As an OpenShift cluster administrator (standalone or HyperShift), I want the storage
+  operator to report whether the configured KMS key is valid and accessible via a
+  condition on `ClusterCSIDriver`, so I can diagnose encryption issues without waiting
+  for PVC provisioning failures.
+
 ### Goals
 
 - Add an optional `kmsKeyARN` field under
@@ -98,6 +103,9 @@ this feature depends on AWS approving that managed policy update.
   not continuously reconciled).
 - Report key validity via a dedicated `ValidAWSStorageKMSConfig` condition on the
   `HostedCluster` status at creation time.
+- Report key validity via a `KMSKeyValid` condition on `ClusterCSIDriver.status`,
+  validated continuously by the aws-ebs-csi-driver-operator. This applies to both
+  standalone and HyperShift clusters.
 - Expose `--storage-volumes-kms-key` in the `hcp create cluster aws` command and the
   `hypershift create cluster aws` developer CLI.
 - Apply identically to ROSA HCP and self-managed HyperShift on AWS.
