@@ -31,7 +31,7 @@ superseded-by: []
 ## Summary
 
 This enhancement adds an optional `kmsKeyARN` field under
-`spec.operatorConfiguration.aws.csiDriverConfig` on the HyperShift `HostedCluster`
+`spec.operatorConfiguration.csiDriverConfig.aws` on the HyperShift `HostedCluster`
 API. When set at cluster creation time, the Hosted Cluster Config Operator (HCCO)
 propagates the key ARN to the `ClusterCSIDriver` resource in the guest cluster,
 causing the cluster-storage-operator to configure the default StorageClass to encrypt
@@ -96,7 +96,7 @@ this feature depends on AWS approving that managed policy update.
 ### Goals
 
 - Add an optional `kmsKeyARN` field under
-  `spec.operatorConfiguration.aws.csiDriverConfig` as a string field accepting
+  `spec.operatorConfiguration.csiDriverConfig.aws` as a string field accepting
   KMS key ARNs and alias ARNs.
 - Propagate the field at cluster creation from `HostedCluster` →
   `HostedControlPlane` → `ClusterCSIDriver` in the guest cluster (write-once,
@@ -138,7 +138,7 @@ this feature depends on AWS approving that managed policy update.
 
 ## Proposal
 
-When a customer sets `spec.operatorConfiguration.aws.csiDriverConfig.kmsKeyARN` on a
+When a customer sets `spec.operatorConfiguration.csiDriverConfig.aws.kmsKeyARN` on a
 `HostedCluster` at creation time, the following propagation chain executes:
 
 1. The HC controller mirrors the `operatorConfiguration` (including the new `aws`
@@ -188,7 +188,7 @@ No CSO changes are needed.
      --storage-volumes-kms-key arn:aws:kms:us-east-1:123456789012:key/mrk-abc123 \
      ...
    ```
-   or sets `spec.operatorConfiguration.aws.csiDriverConfig.kmsKeyARN` directly on the
+   or sets `spec.operatorConfiguration.csiDriverConfig.aws.kmsKeyARN` directly on the
    `HostedCluster` manifest.
 2. The HC controller creates the `HostedControlPlane` with `operatorConfiguration`
    mirrored.
@@ -231,21 +231,21 @@ it reflects the day-1 validation result only.
 
 #### New field: `kmsKeyARN` on `AWSCSIDriverConfig`
 
-A new field is added under `spec.operatorConfiguration.aws.csiDriverConfig` on both
-`HostedCluster` and `HostedControlPlane`. This introduces a pattern for
-platform-specific operator configuration: platform-agnostic configs (CVO, CNO,
-Ingress) remain at the top level of `operatorConfiguration`, while platform-specific
-configs go under `operatorConfiguration.<platform>`.
+A new field is added under `spec.operatorConfiguration.csiDriverConfig.aws` on both
+`HostedCluster` and `HostedControlPlane`. This follows the ingress operator pattern
+where platform-specific configuration is nested inside the operator's own config
+(`ingressOperator.endpointPublishingStrategy.loadBalancer.providerParameters.aws`).
+The `CSIDriverOperatorConfig` struct naturally extends to `azure`, `gcp` in the future.
 
 New types:
 
 ```go
-// AWSOperatorConfiguration specifies AWS-specific configuration for operators
+// CSIDriverOperatorConfig specifies configuration for CSI driver operators
 // in the hosted cluster.
-type AWSOperatorConfiguration struct {
-	// csiDriverConfig specifies configuration for the AWS EBS CSI driver operator.
+type CSIDriverOperatorConfig struct {
+	// aws specifies configuration for the AWS EBS CSI driver operator.
 	// +optional
-	CSIDriverConfig *AWSCSIDriverConfig `json:"csiDriverConfig,omitempty"`
+	AWS *AWSCSIDriverConfig `json:"aws,omitempty"`
 }
 
 // AWSCSIDriverConfig specifies configuration for the AWS EBS CSI driver.
@@ -280,9 +280,9 @@ Added to `OperatorConfiguration`:
 type OperatorConfiguration struct {
 	// ... existing fields (clusterVersionOperator, clusterNetworkOperator, ingressOperator)
 
-	// aws specifies AWS-specific operator configuration for the hosted cluster.
+	// csiDriverConfig specifies configuration for CSI driver operators in the hosted cluster.
 	// +optional
-	AWS *AWSOperatorConfiguration `json:"aws,omitempty"`
+	CSIDriverConfig *CSIDriverOperatorConfig `json:"csiDriverConfig,omitempty"`
 }
 ```
 
@@ -452,9 +452,9 @@ admin changes. This is the same approach used for the default ingress controller
 
 ### Drawbacks
 
-- Introduces a new sub-pattern in `OperatorConfiguration`: the first
-  platform-specific entry (`aws`). This establishes a precedent that future
-  platform-specific operator configs (Azure, GCP) would follow.
+- Introduces a new operator entry in `OperatorConfiguration` (`csiDriverConfig`).
+  Platform branching is inside the operator config, following the ingress operator
+  pattern.
 - The KMS probe in the driver operator adds one AWS API call per reconcile cycle
   when a KMS key is configured.
 
@@ -511,7 +511,7 @@ Unit tests will cover the propagation chain (HC controller mirroring, HCCO stora
 reconciliation with write-once semantics, condition bubble-up), KMS validation logic
 (all condition states), and CLI flag wiring. Specific test cases:
 
-- HC controller mirrors `operatorConfiguration.aws.csiDriverConfig` from HC to HCP
+- HC controller mirrors `operatorConfiguration.csiDriverConfig.aws` from HC to HCP
 - HCCO writes `ClusterCSIDriver.DriverConfig.AWS.KMSKeyARN` on initial creation
 - HCCO skips `DriverConfig` when `ClusterCSIDriver` already exists (write-once)
 - Condition states: no key → Unknown, valid key → True, invalid role → False,
@@ -531,7 +531,7 @@ the `hypershift` cluster profile with Boskos-managed AWS account leasing.
 Test scenarios:
 
 1. **Day-1 key configuration:**
-   - Create a `HostedCluster` with `operatorConfiguration.aws.csiDriverConfig.kmsKeyARN`
+   - Create a `HostedCluster` with `operatorConfiguration.csiDriverConfig.aws.kmsKeyARN`
      set
    - Wait for `ValidAWSStorageKMSConfig` condition to become `True/AsExpected`
    - Verify `ClusterCSIDriver.spec.driverConfig.aws.kmsKeyARN` is set in the hosted
