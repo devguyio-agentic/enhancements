@@ -78,9 +78,9 @@ this feature depends on AWS approving that managed policy update.
   directly in the guest cluster, so that I can rotate keys or change encryption
   settings without recreating the cluster.
 
-- As a self-managed HyperShift operator on AWS, I want to specify a KMS key for the
-  default StorageClass at cluster creation time via the developer CLI (`hypershift`)
-  so that I can enforce encryption standards from day 1.
+- As a self-managed HyperShift operator or HyperShift developer on AWS, I want to
+  specify a KMS key for the default StorageClass at cluster creation time via the
+  `hcp` or `hypershift` CLI so that I can enforce encryption standards from day 1.
 
 - As a cluster operations engineer, I want a dedicated status condition on the
   `HostedCluster` that reports whether the initially configured KMS key is valid and
@@ -89,8 +89,9 @@ this feature depends on AWS approving that managed policy update.
 
 ### Goals
 
-- Add `kmsKeyARN` to a new `AWSCSIDriverConfig` struct under
-  `spec.operatorConfiguration.aws.csiDriverConfig` as an optional string field.
+- Add an optional `kmsKeyARN` field under
+  `spec.operatorConfiguration.aws.csiDriverConfig` as a string field accepting
+  KMS key ARNs and alias ARNs.
 - Propagate the field at cluster creation from `HostedCluster` →
   `HostedControlPlane` → `ClusterCSIDriver` in the guest cluster (write-once,
   not continuously reconciled).
