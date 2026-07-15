@@ -528,12 +528,12 @@ reconciliation with write-once semantics, condition bubble-up), KMS validation l
 
 ### E2E Tests
 
-E2E tests will be added to the HyperShift v2 E2E test suite (`test/e2e/v2/`), which
-runs against a pre-existing hosted cluster on live AWS infrastructure. The test
+E2E tests will be added to the HyperShift E2E test suite, which runs against a
+pre-existing hosted cluster on live AWS infrastructure. The test
 reuses the existing CI KMS key (`alias/hypershift-ci`) already provisioned in the
 CI AWS account.
 
-Tests run in the `e2e-v2-aws` presubmit and `e2e-aws-ovn` periodic CI jobs, which use
+Tests run in the `e2e-aws` presubmit and `e2e-aws-ovn` periodic CI jobs, which use
 the `hypershift` cluster profile with Boskos-managed AWS account leasing.
 
 Test scenarios:
@@ -618,10 +618,10 @@ unknown-field pruning applies at admission).
 condition reaches its terminal state within one HCCO reconcile interval during
 cluster provisioning.
 
-#### Impact on Existing SLIs The aws-ebs-csi-driver-operator reconcile loop gains
+#### Impact on Existing SLIs
 
-one KMS API call per reconcile when `kmsKeyARN` is set on `ClusterCSIDriver`.
-The volume tagging controller in the same operator already does this.
+The StorageClass hook adds one KMS API call every 30 minutes when `kmsKeyARN` is
+configured on `ClusterCSIDriver`, with immediate re-validation if the ARN changes.
 
 #### Failure Modes
 
@@ -669,7 +669,7 @@ the CSI driver level if the key is invalid or permissions are insufficient.
 ## Infrastructure Needed
 
 No new subprojects, repositories, or testing infrastructure are required. The E2E
-tests run in the existing HyperShift v2 E2E CI jobs (`e2e-v2-aws`, `e2e-aws-ovn`),
+tests run in the existing HyperShift E2E CI jobs (`e2e-aws`, `e2e-aws-ovn`),
 which already provision live AWS infrastructure with KMS access via the
 `alias/hypershift-ci` key. The `StorageARN` role in the CI account may need
 `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKeyWithoutPlaintext`, and
