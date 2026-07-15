@@ -416,12 +416,8 @@ the component closest to the actual KMS usage. It already reads `kmsKeyARN` from
 `ClusterCSIDriver`, injects it into the StorageClass, and has the AWS SDK + IRSA
 credential plumbing for making AWS API calls. Placing validation here means the probe
 validates what the operator actually consumes, using the same credentials that the CSI
-driver will use at volume creation time. It also means standalone (non-HyperShift)
-clusters get the same validation. The condition is on `ClusterCSIDriver`, which is a
-standard OpenShift resource. The existing `ValidAWSKMSConfig` etcd validation in the
-CPO is not a precedent for placement because it uses a different role
-(`AWSKMSRoleARN`), validates a different key (etcd encryption), and runs in a
-HyperShift-only component.
+driver will use at volume creation time. Standalone (non-HyperShift) clusters get the
+same validation automatically.
 
 ### Risks and Mitigations
 
@@ -433,16 +429,6 @@ those volumes become inaccessible. HyperShift cannot prevent this.
 reconcile (every minute) with the specific AWS error code in the message. In
 HyperShift, this surfaces as `ClusterVersionSucceeding = False`. Document the
 key lifecycle responsibility.
-
-#### Cross-Team Dependency on csi-operator
-
-The KMS validation hook extension must be implemented in `openshift/csi-operator`
-by the storage team. No HyperShift-side changes are needed for condition
-propagation since it flows through the standard CVO health chain.
-*Mitigation:* The HyperShift API field and CLI flag can ship independently. The
-validation condition is additive. Clusters function correctly without the validation
-(encryption works, you just don't get the status condition). The csi-operator
-change can land in a subsequent release if needed.
 
 #### IAM Role Misconfiguration
 
