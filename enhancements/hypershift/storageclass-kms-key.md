@@ -90,7 +90,7 @@ this feature depends on AWS approving that managed policy update.
 
 - As an OpenShift cluster administrator (standalone or HyperShift), I want the
   StorageClass controller to validate the configured KMS key and report a degraded
-  condition if the key is inaccessible, so I can diagnose encryption issues without
+  condition if the key is invalid or the role lacks permissions, so I can diagnose encryption issues without
   waiting for PVC provisioning failures.
 
 ### Goals
@@ -104,7 +104,8 @@ this feature depends on AWS approving that managed policy update.
 - Report key validity via a dedicated `ValidAWSStorageKMSConfig` condition on the
   `HostedCluster` status at creation time.
 - Validate the KMS key in the aws-ebs-csi-driver-operator's StorageClass hook and
-  report `StorageClassControllerDegraded` if the key is inaccessible. This applies
+  report `StorageClassControllerDegraded` if the key is invalid or the role lacks
+  permissions. This applies
   to both standalone and HyperShift clusters.
 - Expose `--storage-volumes-kms-key` in the `hcp create cluster aws` command and the
   `hypershift create cluster aws` developer CLI.
@@ -305,7 +306,7 @@ A new condition type, modeled on `ValidAWSKMSConfig` (etcd encryption):
 |--------|--------|---------|-----------------|
 | `Unknown` | `StatusUnknown` | Field not configured | `"Storage KMS is not configured"` |
 | `True` | `AsExpected` | Key validated successfully | `"Storage KMS key is valid and accessible"` |
-| `False` | `AWSError` | KMS API call failed | `"KMS key arn:aws:kms:us-east-1:123456789012:key/abc-def is not accessible: KMSKeyDisabled. Verify the key is enabled and the StorageARN role has the required KMS permissions."` |
+| `False` | `AWSError` | KMS API call failed | `"KMS key arn:aws:kms:us-east-1:123456789012:key/abc-def: KMSKeyDisabled: key is disabled"` |
 | `False` | `InvalidIAMRole` | Role assumption failed | `"Failed to assume StorageARN role for KMS key arn:aws:kms:us-east-1:123456789012:key/abc-def: AccessDenied. Verify the StorageARN role in AWSRolesRef has kms:Decrypt, kms:GenerateDataKeyWithoutPlaintext, and kms:CreateGrant permissions on this key."` |
 
 Registered in `ExpectedHCConditions` as `ConditionUnknown` when `kmsKeyARN` is not
@@ -353,7 +354,7 @@ or permissions are introduced beyond what the feature already requires.
 The KMS key validation in the StorageClass hook applies to standalone clusters as
 well. When `ClusterCSIDriver.spec.driverConfig.aws.kmsKeyARN` is set on a standalone
 cluster, the same `kms:Encrypt` probe runs and `StorageClassControllerDegraded` fires
-if the key is inaccessible. The `HostedCluster` API field and `ValidAWSStorageKMSConfig`
+if the key is invalid or permissions are insufficient. The `HostedCluster` API field and `ValidAWSStorageKMSConfig`
 condition are HyperShift-only.
 
 #### Single-node Deployments or MicroShift
@@ -646,7 +647,8 @@ The volume tagging controller in the same operator already does this.
 
 - If the KMS probe fails (condition `False`), the `ClusterCSIDriver` field is still
   written (the HCCO does not gate reconciliation on condition success). PVC
-  provisioning may fail at the CSI driver level if the key is inaccessible.
+  provisioning may fail at the CSI driver level if the key is invalid or permissions
+are insufficient.
 - No impact on existing workloads or control plane availability.
 
 ## Support Procedures
@@ -681,7 +683,8 @@ manage `ClusterCSIDriver.DriverConfig` after initial creation.
 
  If the HCCO KMS probe errors during cluster creation, the
 condition remains `False` but control plane provisioning continues. New PVC
-provisioning may fail at the CSI driver level if the key is inaccessible.
+provisioning may fail at the CSI driver level if the key is invalid or permissions
+are insufficient.
 
 ## Infrastructure Needed
 
