@@ -57,17 +57,6 @@ propagate it to the guest cluster.
 Self-managed HyperShift on AWS has the same gap: operators cannot configure default
 StorageClass encryption at cluster creation time.
 
-### IAM Policy Readiness
-
-Self-managed HyperShift clusters use inline IAM policies
-(defined in `cmd/infra/aws/iam.go`) that already include the required KMS actions.
-Encryption works out of the box. ROSA HCP clusters use the AWS-managed
-`ROSAAmazonEBSCSIDriverOperatorPolicy`, which currently has zero KMS actions. A
-managed policy change request to add `kms:Encrypt` (for validation),
-`kms:Decrypt`, `kms:GenerateDataKeyWithoutPlaintext`, and `kms:CreateGrant` (conditioned with
-`kms:ViaService: ec2.*.amazonaws.com`) is being submitted to AWS. ROSA HCP GA for
-this feature depends on AWS approving that managed policy update.
-
 ### User Stories
 
 - As a ROSA HCP cluster administrator, I want to specify a KMS key ARN when creating
@@ -354,6 +343,18 @@ Not applicable. Storage KMS configuration in standard OpenShift clusters is hand
 via `ClusterCSIDriver` directly.
 
 ### Implementation Details/Notes/Constraints
+
+#### IAM Permissions
+
+The StorageARN role requires the following KMS permissions:
+- `kms:Encrypt` (for key validation in the StorageClass hook)
+- `kms:Decrypt` (for EBS volume attachment)
+- `kms:GenerateDataKeyWithoutPlaintext` (for EBS volume creation)
+- `kms:CreateGrant` (for EBS service principal access)
+
+ROSA HCP clusters require these permissions in the
+`ROSAAmazonEBSCSIDriverOperatorPolicy` AWS managed policy. Self-managed
+HyperShift clusters require equivalent permissions on the StorageARN role.
 
 #### Day-1-Only Reconciliation
 
