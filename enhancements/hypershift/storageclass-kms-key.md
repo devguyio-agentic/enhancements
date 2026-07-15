@@ -88,10 +88,10 @@ this feature depends on AWS approving that managed policy update.
   accessible, so I can catch KMS permission problems during provisioning, not after the first
   PVC failure.
 
-- As an OpenShift cluster administrator (standalone or HyperShift), I want the storage
-  operator to report whether the configured KMS key is valid and accessible via a
-  condition on `ClusterCSIDriver`, so I can diagnose encryption issues without waiting
-  for PVC provisioning failures.
+- As an OpenShift cluster administrator (standalone or HyperShift), I want the
+  StorageClass controller to validate the configured KMS key and report a degraded
+  condition if the key is inaccessible, so I can diagnose encryption issues without
+  waiting for PVC provisioning failures.
 
 ### Goals
 
@@ -103,9 +103,9 @@ this feature depends on AWS approving that managed policy update.
   not continuously reconciled).
 - Report key validity via a dedicated `ValidAWSStorageKMSConfig` condition on the
   `HostedCluster` status at creation time.
-- Report key validity via a `KMSKeyValid` condition on `ClusterCSIDriver.status`,
-  validated continuously by the aws-ebs-csi-driver-operator. This applies to both
-  standalone and HyperShift clusters.
+- Validate the KMS key in the aws-ebs-csi-driver-operator's StorageClass hook and
+  report `StorageClassControllerDegraded` if the key is inaccessible. This applies
+  to both standalone and HyperShift clusters.
 - Expose `--storage-volumes-kms-key` in the `hcp create cluster aws` command and the
   `hypershift create cluster aws` developer CLI.
 - Apply identically to ROSA HCP and self-managed HyperShift on AWS.
@@ -150,13 +150,16 @@ When a customer sets `spec.operatorConfiguration.csiDriverConfig.aws.kmsKeyARN` 
    `DriverConfig`, preserving in-cluster modifications (like
    `ReconcileDefaultIngressController`, which returns early if the resource exists).
 3. The **aws-ebs-csi-driver-operator** (in `openshift/csi-operator`) validates the
-   KMS key by calling `kms:Encrypt` with a test payload using the
-   `ebs-cloud-credentials` (StorageARN role). This operator already uses the AWS SDK
-   for volume tagging and has IRSA credential plumbing. The validation runs
-   continuously in the operator's reconcile loop, reporting a `KMSKeyValid` condition
-   on `ClusterCSIDriver.status.conditions`.
-4. The HCCO reads the `KMSKeyValid` condition from `ClusterCSIDriver` in the guest
-   cluster and maps it to `ValidAWSStorageKMSConfig` on `HostedControlPlane` status.
+   KMS key in the existing `withKMSKeyHook` StorageClass hook. Before injecting
+   `kmsKeyId` into the StorageClass, the hook calls `kms:Encrypt` with a test
+   payload. If the call fails, the hook returns an error with the AWS SDK error
+   code and message (using `smithy.APIError`, same pattern as the volume tags
+   controller in the same package). The `WithSyncDegradedOnError` framework
+   automatically sets `StorageClassControllerDegraded = True` with the error
+   details in the condition message.
+4. The HCCO reads the `StorageClassControllerDegraded` condition from the
+   `ClusterCSIDriver` in the guest cluster. If the message indicates a KMS error,
+   it maps it to `ValidAWSStorageKMSConfig` on `HostedControlPlane` status.
    The HC controller bubbles it to `HostedCluster` status.
 5. The CSO reads the `ClusterCSIDriver` value and configures the default StorageClass
    with `parameters.kmsKeyId`. New EBS volumes provisioned via the StorageClass carry
@@ -195,14 +198,16 @@ No CSO changes are needed.
    mirrored.
 3. The HCCO writes `ClusterCSIDriver.spec.driverConfig.aws.kmsKeyARN` in the guest
    cluster (write-once: only on initial creation).
-4. The aws-ebs-csi-driver-operator validates the key:
-   - If the `ebs-cloud-credentials` role can assume and KMS `Encrypt` succeeds →
-     `KMSKeyValid` condition `True/AsExpected` on ClusterCSIDriver.
-   - If role assumption fails → `KMSKeyValid` condition `False/InvalidIAMRole`.
-   - If KMS call fails (key disabled, deleted, or wrong region) → `KMSKeyValid`
-     condition `False/AWSError`.
-5. The HCCO reads `KMSKeyValid` from ClusterCSIDriver and maps it to
-   `ValidAWSStorageKMSConfig` on HCP status. The HC controller bubbles it to HC.
+4. The aws-ebs-csi-driver-operator validates the key in the StorageClass hook:
+   - If `kms:Encrypt` succeeds, the hook injects `kmsKeyId` into the StorageClass
+     and returns nil. No degraded condition.
+   - If role assumption fails or the KMS call fails (key disabled, deleted, wrong
+     region), the hook returns an error containing the AWS error code and message.
+     `StorageClassControllerDegraded = True` is set automatically with the error
+     details.
+5. The HCCO reads `StorageClassControllerDegraded` from ClusterCSIDriver and maps
+   KMS-related errors to `ValidAWSStorageKMSConfig` on HCP status. The HC
+   controller bubbles it to HC.
 6. The CSO configures the default StorageClass with `parameters.kmsKeyId` set to the
    ARN.
 7. New PVCs created from the default StorageClass produce EBS volumes encrypted with
@@ -304,9 +309,10 @@ A new condition type, modeled on `ValidAWSKMSConfig` (etcd encryption):
 | `False` | `InvalidIAMRole` | Role assumption failed | `"Failed to assume StorageARN role for KMS key arn:aws:kms:us-east-1:123456789012:key/abc-def: AccessDenied. Verify the StorageARN role in AWSRolesRef has kms:Decrypt, kms:GenerateDataKeyWithoutPlaintext, and kms:CreateGrant permissions on this key."` |
 
 Registered in `ExpectedHCConditions` as `ConditionUnknown` when `kmsKeyARN` is not
-set. The validation runs continuously in the driver operator's reconcile loop.
-If a key becomes disabled or IAM permissions change, the condition updates
-accordingly.
+set. The underlying validation runs in the driver operator's StorageClass hook on
+every reconcile. If a key becomes disabled or IAM permissions change,
+`StorageClassControllerDegraded` fires and the HCCO maps it to
+`ValidAWSStorageKMSConfig = False`.
 
 #### CLI flag: `--storage-volumes-kms-key`
 
@@ -344,8 +350,11 @@ or permissions are introduced beyond what the feature already requires.
 
 #### Standalone Clusters
 
-Not applicable. This enhancement targets only `HostedCluster` resources managed by
-HyperShift.
+The KMS key validation in the StorageClass hook applies to standalone clusters as
+well. When `ClusterCSIDriver.spec.driverConfig.aws.kmsKeyARN` is set on a standalone
+cluster, the same `kms:Encrypt` probe runs and `StorageClassControllerDegraded` fires
+if the key is inaccessible. The `HostedCluster` API field and `ValidAWSStorageKMSConfig`
+condition are HyperShift-only.
 
 #### Single-node Deployments or MicroShift
 
@@ -368,34 +377,38 @@ modifying `DriverConfig`. This follows the ingress controller pattern
 
 #### KMS Key Validation
 
- Validation is performed by the
-aws-ebs-csi-driver-operator (in `openshift/csi-operator`), not by the HCCO or CPO.
-The operator already uses the AWS SDK v2 for volume tagging
-(`pkg/driver/aws-ebs/aws_ebs_tags_controller.go`), with IRSA credential plumbing via
-the `ebs-cloud-credentials` secret and `stscreds.NewWebIdentityRoleProvider`. A new
-`EBSKMSKeyValidationController` follows the same pattern: it reads `kmsKeyARN` from
-`ClusterCSIDriver.spec.driverConfig.aws`, calls `kms:Encrypt` with a test payload,
-and reports a `KMSKeyValid` condition on `ClusterCSIDriver.status.conditions`. This
-controller runs continuously in the operator's reconcile loop. If a key is
-disabled or IAM permissions are revoked, the condition transitions to `False`.
+Validation is performed by the existing `withKMSKeyHook` in the
+aws-ebs-csi-driver-operator (in `openshift/csi-operator`). The hook already reads
+`kmsKeyARN` from `ClusterCSIDriver.spec.driverConfig.aws` and injects it into the
+StorageClass. The enhancement extends this hook to call `kms:Encrypt` with a test
+payload before injecting the key. If the call fails, the hook returns an error
+containing the AWS SDK error code and message (extracted via `smithy.APIError`,
+the same pattern used by the volume tags controller in
+`pkg/driver/aws-ebs/aws_ebs_tags_queue_worker.go`).
+
+The StorageClass controller uses `WithSyncDegradedOnError`, which automatically
+sets `StorageClassControllerDegraded = True` with the error in the condition
+message. The AWS credential plumbing (IRSA via `ebs-cloud-credentials` and
+`stscreds.NewWebIdentityRoleProvider`) is already established in the tags
+controller in the same package. The StorageClass controller resyncs every minute,
+so the validation runs continuously.
 
 #### Condition Propagation Chain
 
- The `KMSKeyValid` condition set by the
-aws-ebs-csi-driver-operator on `ClusterCSIDriver.status` propagates through:
+The `StorageClassControllerDegraded` condition set by the StorageClass controller
+on the operator status propagates through:
 1. The CSO's `CSIDriverOperatorCRController.syncConditions()` copies it to the
-   Storage operator CR as `AWSEBSCSIDriverOperatorCRKMSKeyValid`
+   Storage operator CR as `AWSEBSCSIDriverOperatorCRDegraded`
 2. The CSO's `ClusterOperatorStatusController` aggregates it into the
-   `ClusterOperator "storage"` resource (contributing to the Degraded signal)
-3. For explicit HyperShift visibility, the HCCO reads the `KMSKeyValid` condition
-   from `ClusterCSIDriver` in the guest cluster and maps it to
+   `ClusterOperator "storage"` Degraded signal
+3. For explicit HyperShift visibility, the HCCO reads the Degraded condition,
+   detects KMS-related errors in the message, and maps it to
    `ValidAWSStorageKMSConfig` on `HostedControlPlane` status
 4. The HC controller copies `ValidAWSStorageKMSConfig` from HCP to HostedCluster
 
-This is a cross-repo effort requiring changes in `openshift/csi-operator` (validation
-controller), `openshift/hypershift` (HCCO condition watch + HC propagation), and
-potentially `openshift/cloud-credential-operator` (adding `kms:Encrypt` to the
-CredentialsRequest for ROSA standalone clusters).
+This is a cross-repo effort requiring changes in `openshift/csi-operator`
+(extending the KMS hook with validation) and `openshift/hypershift` (HCCO
+condition watch + HC propagation).
 
 #### Why the Driver Operator
 
@@ -417,17 +430,16 @@ HyperShift-only component.
 
 If the customer disables or deletes the KMS key in AWS after volumes are encrypted,
 those volumes become inaccessible. HyperShift cannot prevent this.
-*Mitigation:* The `KMSKeyValid` condition on `ClusterCSIDriver` transitions to
-`False/AWSError` on the next driver operator reconcile, and the
-`ValidAWSStorageKMSConfig` condition on the `HostedCluster` follows. This provides
-continuous monitoring, unlike a one-shot probe. Document the key lifecycle
-responsibility.
+*Mitigation:* `StorageClassControllerDegraded` fires on the next StorageClass
+controller reconcile (every minute) with the specific AWS error code in the
+message. The `ValidAWSStorageKMSConfig` condition on the `HostedCluster` follows.
+Document the key lifecycle responsibility.
 
 #### Cross-Team Dependency on csi-operator
 
-The KMS validation controller must be implemented in `openshift/csi-operator` by
-the storage team. The HyperShift-side changes (HCCO condition watch, HC propagation)
-depend on the `KMSKeyValid` condition existing on `ClusterCSIDriver.status`.
+The KMS validation hook extension must be implemented in `openshift/csi-operator`
+by the storage team. The HyperShift-side changes (HCCO condition watch, HC
+propagation) depend on `StorageClassControllerDegraded` carrying KMS error details.
 *Mitigation:* The HyperShift API field and CLI flag can ship independently. The
 validation condition is additive. Clusters function correctly without the validation
 (encryption works, you just don't get the status condition). The csi-operator
@@ -461,8 +473,8 @@ HC spec would be a disruptive change.
 - Introduces a new operator entry in `OperatorConfiguration` (`csiDriverConfig`).
   Platform branching is inside the operator config, following the ingress operator
   pattern.
-- The KMS probe in the driver operator adds one AWS API call per reconcile cycle
-  when a KMS key is configured.
+- The KMS probe in the StorageClass hook adds one AWS API call per StorageClass
+  controller reconcile (every minute) when a KMS key is configured.
 
 ## Alternatives (Not Implemented)
 
@@ -524,8 +536,8 @@ reconciliation with write-once semantics, condition bubble-up), KMS validation l
 - HC controller mirrors `operatorConfiguration.csiDriverConfig.aws` from HC to HCP
 - HCCO writes `ClusterCSIDriver.DriverConfig.AWS.KMSKeyARN` on initial creation
 - HCCO skips `DriverConfig` when `ClusterCSIDriver` already exists (write-once)
-- Condition states: no key → Unknown, valid key → True, invalid role → False,
-  failed encrypt → False
+- StorageClass hook: valid key → no error, invalid key → error with AWS error code,
+  no key → hook returns nil (no validation)
 - CLI: `--storage-volumes-kms-key` flag parsed and wired to HC spec
 
 ### E2E Tests
@@ -681,7 +693,7 @@ which already provision live AWS infrastructure with KMS access via the
 `kms:CreateGrant` permissions added for this key.
 
 Changes are required in the following repositories:
-- `openshift/csi-operator` : new `EBSKMSKeyValidationController` in
-  `pkg/driver/aws-ebs/`, addition of `aws-sdk-go-v2/service/kms` dependency
+- `openshift/csi-operator`: extend `withKMSKeyHook` in `pkg/driver/aws-ebs/aws_ebs.go`
+  with `kms:Encrypt` validation, addition of `aws-sdk-go-v2/service/kms` dependency
 - `openshift/hypershift` : HCCO condition watch, HC condition propagation, API field,
   CLI flag, HCCO write-once propagation
