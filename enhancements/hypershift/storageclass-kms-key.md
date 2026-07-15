@@ -671,7 +671,7 @@ the CSI driver level if the key is invalid or permissions are insufficient.
 No new subprojects, repositories, or testing infrastructure are required. The E2E
 tests run in the existing HyperShift E2E CI jobs (`e2e-aws`, `e2e-aws-ovn`),
 which already provision live AWS infrastructure with KMS access via the
-`alias/hypershift-ci` key. The `StorageARN` role in the CI account may need
+`alias/hypershift-ci` key. The `StorageARN` role in the CI account must have
 `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKeyWithoutPlaintext`, and
 `kms:CreateGrant` permissions added for this key.
 
