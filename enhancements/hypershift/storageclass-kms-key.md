@@ -189,12 +189,23 @@ No CSO changes are needed.
 3. The HCCO writes `ClusterCSIDriver.spec.driverConfig.aws.kmsKeyARN` in the guest
    cluster (write-once: only on initial creation).
 4. The aws-ebs-csi-driver-operator validates the key in the StorageClass hook:
-   - If `kms:Encrypt` succeeds, the hook injects `kmsKeyId` into the StorageClass
-     and returns nil. No degraded condition.
-   - If role assumption fails or the KMS call fails (key disabled, deleted, wrong
-     region), the hook returns an error containing the AWS error code and message.
-     `StorageClassControllerDegraded = True` is set automatically with the error
-     details.
+   - The `withKMSKeyHook` reads `kmsKeyARN` from
+     `ClusterCSIDriver.spec.driverConfig.aws`
+   - Before injecting `kmsKeyId` into the StorageClass, the hook calls
+     `kms.Encrypt` with the key ARN and a small test payload using the
+     `ebs-cloud-credentials` (same IRSA credential path as the volume tags
+     controller)
+   - The validation result is cached by key ARN. Re-validation occurs only when
+     the ARN changes or on a periodic interval (every 30 minutes, matching the
+     `EBSVolumeTagsController`'s resync period), not on every StorageClass
+     controller resync
+   - If the call succeeds, the hook injects `kmsKeyId` into the StorageClass and
+     returns nil
+   - If the call fails, the hook extracts the AWS error code and message via
+     `smithy.APIError` (e.g. `KMSKeyDisabled`, `AccessDeniedException`,
+     `NotFoundException`) and returns an error. `WithSyncDegradedOnError` sets
+     `StorageClassControllerDegraded = True` with a message like:
+     `"error running hook function (index=1): KMS key arn:aws:kms:...:key/abc: KMSKeyDisabled: key is disabled"`
 5. The CSO configures the default StorageClass with `parameters.kmsKeyId` set to the
    ARN.
 6. New PVCs created from the default StorageClass produce EBS volumes encrypted with
@@ -358,17 +369,29 @@ Validation is performed by the existing `withKMSKeyHook` in the
 aws-ebs-csi-driver-operator (in `openshift/csi-operator`). The hook already reads
 `kmsKeyARN` from `ClusterCSIDriver.spec.driverConfig.aws` and injects it into the
 StorageClass. The enhancement extends this hook to call `kms:Encrypt` with a test
-payload before injecting the key. If the call fails, the hook returns an error
-containing the AWS SDK error code and message (extracted via `smithy.APIError`,
-the same pattern used by the volume tags controller in
-`pkg/driver/aws-ebs/aws_ebs_tags_queue_worker.go`).
+payload before injecting the key.
 
-The StorageClass controller uses `WithSyncDegradedOnError`, which automatically
-sets `StorageClassControllerDegraded = True` with the error in the condition
-message. The AWS credential plumbing (IRSA via `ebs-cloud-credentials` and
-`stscreds.NewWebIdentityRoleProvider`) is already established in the tags
-controller in the same package. The StorageClass controller resyncs every minute,
-so the validation runs continuously.
+The hook builder (`withKMSKeyHook(c *clients.Clients)`) already captures the
+`ClusterCSIDriver` informer lister via closure. The AWS config (region, IRSA
+credentials via `ebs-cloud-credentials`) is captured the same way, following the
+pattern established by the `EBSVolumeTagsController` in the same package
+(`pkg/driver/aws-ebs/aws_ebs_tags_controller.go`), which uses
+`stscreds.NewWebIdentityRoleProvider` with session expiry handling.
+
+If the `kms.Encrypt` call fails, the hook extracts the AWS error code and message
+via `smithy.APIError` (same pattern as the volume tags queue worker in
+`pkg/driver/aws-ebs/aws_ebs_tags_queue_worker.go`) and returns an error like:
+`"KMS key arn:aws:kms:...:key/abc: KMSKeyDisabled: key is disabled"`.
+The StorageClass controller's `WithSyncDegradedOnError` wraps this and sets
+`StorageClassControllerDegraded = True` with a message like:
+`"error running hook function (index=1): KMS key arn:aws:kms:...:key/abc: KMSKeyDisabled: key is disabled"`.
+
+To avoid unnecessary AWS API calls, the hook caches the validation result by key
+ARN. Re-validation occurs only when the ARN changes or on a periodic interval
+(every 30 minutes, matching the `EBSVolumeTagsController`'s resync period), not
+on every StorageClass controller resync (which runs every minute). A cached
+failure clears when the ARN changes, triggering immediate re-validation with the
+new key.
 
 #### Condition Propagation Chain
 
