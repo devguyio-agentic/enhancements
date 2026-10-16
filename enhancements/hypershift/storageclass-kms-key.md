@@ -227,6 +227,9 @@ New types:
 type CSIDriverOperatorSpec struct {
 	// aws configures the AWS EBS CSI driver.
 	// It can only be set when spec.platform.type is AWS.
+	//
+	// When omitted, no AWS-specific CSI driver configuration is applied and the
+	// default StorageClass uses the AWS account's default EBS encryption settings.
 	// +optional
 	AWS AWSCSIDriverConfig `json:"aws,omitzero"`
 }
@@ -278,6 +281,8 @@ type OperatorConfiguration struct {
 
 	// csiDriverOperator configures the CSI drivers of the hosted cluster.
 	// Settings are grouped by platform.
+	//
+	// When omitted, the CSI drivers use their default configuration.
 	// +optional
 	CSIDriverOperator CSIDriverOperatorSpec `json:"csiDriverOperator,omitzero"`
 }
@@ -418,7 +423,7 @@ through; when unset, the same ordering holds and the `ClusterCSIDriver` is creat
 without a KMS key):
 
 1. CVO installs the `ClusterCSIDriver` CRD in the guest cluster.
-2. HCCO availability prober completes (all 18 CRDs present).
+2. HCCO availability prober completes (its required guest-cluster CRDs are present).
 3. HCCO reconciles storage, creates `ClusterCSIDriver` (with the KMS key when set),
    sets `ConfigOperatorReconciliationSucceeded=True` on the HostedControlPlane.
 4. The CSO component's precondition is satisfied, and the CSO reconciliation proceeds.
@@ -489,7 +494,7 @@ None at this time.
 
 YAML-driven envtest cases are mandatory for all CEL validation rules per HyperShift
 project convention. Test cases cover `onCreate` and `onUpdate` scenarios across
-multiple Kubernetes API server versions (1.31-1.35):
+multiple Kubernetes API server versions (1.31 through 1.37):
 
 onCreate:
 - Valid KMS key ARN accepted
@@ -508,8 +513,7 @@ onCreate:
 onUpdate:
 - Changing `initialKMSKeyARN` value is rejected
 - Removing `initialKMSKeyARN` is rejected
-- Removing `aws` while `initialKMSKeyARN` was set is rejected
-- Removing `csiDriverOperator` while it was set is rejected
+- Removing `csiDriverOperator` while `initialKMSKeyARN` was set is rejected
 - Adding `initialKMSKeyARN` to a cluster created without it is rejected
 - Removing `operatorConfiguration` while `initialKMSKeyARN` was set is rejected
 - Updating an unrelated field on a cluster with `initialKMSKeyARN` set is accepted
@@ -527,7 +531,7 @@ label filter, so it runs in the `e2e-v2-aws` job. The public cluster is created 
 skips itself when no KMS key is configured on the hosted cluster, so a job without the
 env var wired does not fail; it reports the test as skipped.
 
-Test scenarios:
+The implemented scenario is day-1 key configuration:
 
 1. **Day-1 key configuration:**
    - Create a `HostedCluster` with `operatorConfiguration.csiDriverOperator.aws.initialKMSKeyARN`
@@ -538,13 +542,10 @@ Test scenarios:
    - Verify the resulting EBS volume is encrypted with the specified KMS key via
      `ec2.DescribeVolumes`
 
-2. **Write-once semantics:**
-   - Verify that modifying `ClusterCSIDriver.spec.driverConfig` directly in the hosted
-     cluster persists across HCCO reconcile cycles (the HCCO does not revert it)
-
-3. **Regression (no key configured):**
-   - On a hosted cluster where `initialKMSKeyARN` was never set, verify PVCs use
-     AWS-managed encryption
+Write-once semantics (an admin edit to `ClusterCSIDriver.spec.driverConfig`
+persisting across HCCO reconciles) and the no-key regression path are covered by
+the unit tests on the HCCO reconcile function; dedicated e2e scenarios for them are
+follow-up work and are not yet part of the e2e suite.
 
 ## Graduation Criteria
 
@@ -559,7 +560,8 @@ See above.
 ### GA
 
 - Envtest coverage for CEL validation across multiple Kubernetes versions.
-- E2E test coverage for the full lifecycle (creation, write-once verification).
+- E2E coverage for day-1 key configuration (creation and volume encryption), plus
+  e2e coverage for write-once semantics and the no-key regression path.
 - E2E tests passing in CI for at least one release cycle without flakes.
 - User documentation merged in `openshift-docs` covering the
   `--initial-storage-volumes-kms-key` flag, day-1 encryption setup, and day-2 in-cluster
