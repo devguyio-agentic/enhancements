@@ -212,7 +212,7 @@ where platform-specific configuration is nested inside the operator's own config
 (`ingressOperator.endpointPublishingStrategy.loadBalancer.providerParameters.aws`).
 The `CSIDriverOperatorSpec` struct naturally extends to `azure`, `gcp` in the future.
 
-`OperatorConfiguration` is a shared type embedded on both `HostedClusterSpec` and
+`OperatorConfiguration` is a shared type referenced by both `HostedClusterSpec` and
 `HostedControlPlaneSpec`, so the field is mirrored to `HostedControlPlane`
 automatically. The spec-level CEL guards below live only on `HostedClusterSpec`
 because that is the user-facing, user-editable surface; `HostedControlPlane` is
@@ -283,6 +283,7 @@ type OperatorConfiguration struct {
 	// Settings are grouped by platform.
 	//
 	// When omitted, the CSI drivers use their default configuration.
+	//
 	// +optional
 	CSIDriverOperator CSIDriverOperatorSpec `json:"csiDriverOperator,omitzero"`
 }
@@ -433,12 +434,12 @@ without a KMS key):
 7. The operator reads `ClusterCSIDriver` (with the KMS key already present when set)
    and creates the StorageClass correctly from the start.
 
-The precondition is enforced for all clusters on the initial rollout, which adds
-approximately 30-60 seconds to the CSO's first startup (the time for the HCCO to
-complete its first reconcile). After the CSO workload exists, the gate stops
-enforcing the precondition, so subsequent updates and upgrades are never blocked by
-the condition. This keeps ordering correct on first creation while avoiding any
-upgrade risk from a long-lived `ConfigOperatorReconciliationSucceeded=False`.
+The precondition is enforced for all clusters on the initial rollout, which delays
+the CSO's first startup by the time the HCCO takes to complete its first reconcile.
+After the CSO workload exists, the gate stops enforcing the precondition, so
+subsequent updates and upgrades are never blocked by the condition. This keeps
+ordering correct on first creation while avoiding any upgrade risk from a long-lived
+`ConfigOperatorReconciliationSucceeded=False`.
 
 ### Risks and Mitigations
 
@@ -493,8 +494,9 @@ None at this time.
 ### Envtest (CEL Validation)
 
 YAML-driven envtest cases are mandatory for all CEL validation rules per HyperShift
-project convention. Test cases cover `onCreate` and `onUpdate` scenarios across
-multiple Kubernetes API server versions (1.31 through 1.37):
+project convention. Test cases cover `onCreate` and `onUpdate` scenarios across the
+Kubernetes API server versions in the envtest matrix (the OCP-mapped versions from
+1.30 and the upstream Kubernetes versions through 1.37):
 
 onCreate:
 - Valid KMS key ARN accepted
@@ -525,11 +527,13 @@ pre-existing hosted cluster on live AWS infrastructure. The test reuses the exis
 CI KMS key (`alias/hypershift-ci`) already provisioned in the CI AWS account.
 
 The test is labeled `storage-kms` and is included in the `public` cluster group's
-label filter, so it runs in the `e2e-v2-aws` job. The public cluster is created with
-`--initial-storage-volumes-kms-key` only when the create-guests harness sees
-`HYPERSHIFT_STORAGE_KMS_KEY_ALIAS` set (which resolves the alias to an ARN). The test
-skips itself when no KMS key is configured on the hosted cluster, so a job without the
-env var wired does not fail; it reports the test as skipped.
+label filter. The public cluster is created with `--initial-storage-volumes-kms-key`
+only when the create-guests harness sees `HYPERSHIFT_STORAGE_KMS_KEY_ALIAS` set
+(which resolves the alias to an ARN). The test gates itself on several preconditions
+and skips (rather than fails) when any is unmet: the platform is not AWS, the hosted
+cluster release is below 5.1 (the release in which the propagation landed), no
+`operatorConfiguration` or `initialKMSKeyARN` is configured on the hosted cluster, or
+`AWS_GUEST_INFRA_CREDENTIALS_FILE` is not set for the encryption check.
 
 The implemented scenario is day-1 key configuration:
 
@@ -560,8 +564,9 @@ See above.
 ### GA
 
 - Envtest coverage for CEL validation across multiple Kubernetes versions.
-- E2E coverage for day-1 key configuration (creation and volume encryption), plus
-  e2e coverage for write-once semantics and the no-key regression path.
+- E2E coverage for day-1 key configuration (creation and volume encryption). Write-once
+  semantics and the no-key regression path are covered by HCCO reconcile unit tests;
+  dedicated e2e scenarios for them are follow-up work.
 - E2E tests passing in CI for at least one release cycle without flakes.
 - User documentation merged in `openshift-docs` covering the
   `--initial-storage-volumes-kms-key` flag, day-1 encryption setup, and day-2 in-cluster
