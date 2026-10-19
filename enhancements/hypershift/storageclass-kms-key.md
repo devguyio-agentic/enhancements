@@ -267,7 +267,7 @@ type AWSCSIDriverConfig struct {
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=2048
-	// +kubebuilder:validation:XValidation:rule="self.matches('^arn:(aws|aws-cn|aws-us-gov|aws-iso|aws-iso-b|aws-iso-e|aws-iso-f):kms:[a-z0-9-]+:[0-9]{12}:(key|alias)/.+$')",message="initialKMSKeyARN must be a valid AWS KMS key ARN in the format: arn:<partition>:kms:<region>:<account-id>:(key|alias)/<key-id-or-alias>"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^arn:(aws|aws-cn|aws-us-gov|aws-iso|aws-iso-b|aws-iso-e|aws-iso-f):kms:[a-z]([a-z-]+[a-z0-9])?:[0-9]{12}:(key|alias)/.+$')",message="initialKMSKeyARN must be a valid AWS KMS key ARN in the format: arn:<partition>:kms:<region>:<account-id>:(key|alias)/<key-id-or-alias>"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="initialKMSKeyARN is immutable"
 	InitialKMSKeyARN string `json:"initialKMSKeyARN,omitempty"`
 }
@@ -508,6 +508,8 @@ onCreate:
 - Wrong service rejected
 - Empty key ID rejected
 - Malformed account ID rejected
+- Region consisting only of hyphens rejected
+- Region starting with a hyphen rejected
 - `initialKMSKeyARN` region not matching the cluster region rejected
 - `csiDriverOperator.aws` set on a non-AWS platform rejected
 - Cluster without `csiDriverOperator` accepted
