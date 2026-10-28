@@ -126,10 +126,10 @@ propagation chain executes:
    the KMS encryption.
 
 The CPOv2 component framework blocks the CSO from starting until the HCCO has
-completed its first successful reconcile. This ordering is applied on the initial
-rollout for all clusters (not only those with a KMS key), so that when
-`initialKMSKeyARN` is set the HCCO creates `ClusterCSIDriver` with the key before
-the CSO or its operands read it. See "Bootstrap Ordering" under Implementation Details.
+completed its first successful reconcile. This ordering is applied on every hosted
+cluster's initial rollout, so that when `initialKMSKeyARN` is set the HCCO creates
+`ClusterCSIDriver` with the key before the CSO or its operands read it. See
+"Bootstrap Ordering" under Implementation Details.
 
 The cluster-storage-operator already reads
 `ClusterCSIDriver.spec.driverConfig.aws.kmsKeyARN` and configures the default
@@ -405,8 +405,7 @@ reconcile. This works as follows:
 1. The HCCO reconcile sets `ConfigOperatorReconciliationSucceeded=True` on the
    `HostedControlPlane` after each successful reconcile (including `reconcileStorage`).
 2. The CSO component (`cluster-storage-operator`) declares a precondition on the
-   `ConfigOperatorReconciliationSucceeded` HCP condition for all clusters,
-   regardless of platform or whether `initialKMSKeyARN` is set. The precondition is
+   `ConfigOperatorReconciliationSucceeded` HCP condition. The precondition is
    attached with a gate that enforces it only while the CSO workload does not exist
    yet, so ordering is applied on the first rollout. The CPOv2 framework blocks the
    CSO's entire reconciliation (deployment creation, manifest application) until the
